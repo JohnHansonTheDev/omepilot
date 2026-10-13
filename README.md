@@ -1,35 +1,59 @@
-# OmePilot
+![OmePilot — Better Omegle](assets/omepilot-banner.png)
 
-OmePilot sits on top of Ome.tv and handles the boring stuff for you: skipping people you don't want to talk to, greeting the ones you do, and saving photos into a gallery.
+<p align="center">
+  <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FJohnHansonTheDev%2Fomepilot%2Fmain%2Fversion.json&query=%24.version&prefix=v&label=OmePilot&color=ff5e00" alt="version">
+  <img src="https://img.shields.io/github/v/release/JohnHansonTheDev/omepilot?label=release&color=2e7d32" alt="latest release">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
+  <img src="https://img.shields.io/badge/Chrome-extension-4285F4?logo=googlechrome&logoColor=white" alt="Chrome">
+  <img src="https://img.shields.io/badge/Firefox-add--on-FF7139?logo=firefox&logoColor=white" alt="Firefox">
+  <img src="https://img.shields.io/badge/Tampermonkey-userscript-00485B?logo=tampermonkey&logoColor=white" alt="Tampermonkey">
+  <br>
+  <img src="https://img.shields.io/github/stars/JohnHansonTheDev/omepilot?style=social" alt="star this repo">
+</p>
+
+<p align="center">
+  <b>OmePilot is the autopilot for Ome.tv.</b> Skip who you don't want, greet who you do, save faces to a gallery — automatically.<br>
+  ⭐ <b>Like it? <a href="https://github.com/JohnHansonTheDev/omepilot">Star the repo</a> so others can find it.</b>
+</p>
+
+<p align="center">
+  <a href="#install-no-tampermonkey-needed">Install</a> •
+  <a href="#options">Options</a> •
+  <a href="#screenshots">Screenshots</a> •
+  <a href="https://github.com/JohnHansonTheDev/omepilot/releases">Releases</a> •
+  <a href="https://github.com/JohnHansonTheDev/omepilot/issues">Report a bug</a>
+</p>
+
+---
 
 ## Install (no Tampermonkey needed)
 
-**1. Download the extension folder**
-- On this page click **Code → Download ZIP**, unzip it, and keep the `extension` folder.
+**1. Download**
+- Here: click **Code → Download ZIP** and unzip, **or**
+- Faster: grab `omepilot-extension.zip` from the [**latest release**](https://github.com/JohnHansonTheDev/omepilot/releases) and unzip it.
 
 **2a. Chrome**
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
 3. Click **Load unpacked** and select the `extension` folder.
-4. Done — OmePilot is active on `ome.tv`.
 
 **2b. Firefox**
 1. Open `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on**.
 3. Select the file `extension/manifest.json`.
-4. Done — OmePilot is active on `ome.tv` until Firefox restarts (then just load it again).
 
 **Alternative: Tampermonkey**
 1. Install [Tampermonkey](https://www.tampermonkey.net/).
 2. Create a new userscript and paste the whole [`omepilot.user.js`](omepilot.user.js) file.
 3. Save and open `ome.tv`.
 
+Updates are automatic: OmePilot checks this repo for new versions and tells you inside the app when one drops.
+
 ## First run
 
-1. Open [ome.tv](https://ome.tv) and click **Start** to begin chatting.
-2. Click the orange **⚙️ button** (bottom left) to open settings.
-3. Turn on what you want, press **Save**.
-4. The **Auto-Skip Panel** (bottom right) shows what's happening live.
+1. Open [ome.tv](https://ome.tv) and click **Start**.
+2. Click the orange **⚙️ button** (bottom left) for settings. Turn on what you want, press **Save**.
+3. The **Auto-Skip Panel** (bottom right) shows everything live.
 
 ## Options
 
@@ -70,6 +94,9 @@ OmePilot sits on top of Ome.tv and handles the boring stuff for you: skipping pe
 - **Log** — timestamped feed of everything OmePilot does.
 - **Pause All / Resume All, Enable/Disable Peace, Clear Logs** — quick controls.
 
+### Updates
+- **⬆️ Check for Updates** (in settings) — compares your version against this repo on demand. The daily automatic check does the rest.
+
 ## Screenshots
 
 ### Block countries
@@ -83,4 +110,11 @@ OmePilot sits on top of Ome.tv and handles the boring stuff for you: skipping pe
 
 ## If the page feels slow
 
-Turn filters off one at a time and see which one was the cause — the hand/peace one is usually the heaviest.
+Turn filters off one at a time and see which one was the cause.
+
+---
+
+<p align="center">
+  Made for the Ome.tv community. If OmePilot saves you time, <a href="https://github.com/JohnHansonTheDev/omepilot">give it a ⭐</a> and share it.<br>
+  <sub>ome.tv autopilot • omegle alternative • random video chat filter • country skip • auto skip • tampermonkey userscript • chrome extension • firefox add-on</sub>
+</p>
