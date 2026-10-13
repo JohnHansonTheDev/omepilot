@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "OmePilot",
+  "version": "7.2",
+  "description": "Ome.tv autopilot: country skip, smart filters, auto-greet and face-snap gallery.",
+  "content_scripts": [
+    {
+      "matches": ["*://ome.tv/*", "*://*.ome.tv/*"],
+      "js": [
+        "vendor/hands.js",
+        "vendor/face-api.js",
+        "vendor/jszip.min.js",
+        "omepilot.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "host_permissions": [
+    "*://cdn.jsdelivr.net/*",
+    "*://justadudewhohacks.github.io/*",
+    "*://raw.githubusercontent.com/*",
+    "*://flagcdn.com/*",
+    "http://localhost/*"
+  ]
+}
