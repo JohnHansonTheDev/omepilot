@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ome.tv Customizer + Peace, Male, No-Face & Country Auto Skip + Female Auto Hi (with Pause)
 // @namespace    http://tampermonkey.net/
-// @version      7.2
+// @version      7.3
 // @description  Drag/resize, dark mode, hotkeys, automatic peace-sign skip, remote face/gender skip, frozen/black camera skip, country blocklist skip, auto-hi with auto-pause, skip counter, face save mode gallery, and local server video restart trigger on manual and automatic skips.
 // @author       You
 // @match        *://ome.tv/*
@@ -455,6 +455,7 @@
             <button id="ome-open-country-btn" type="button" class="ome-full-btn" style="background: #00838f;">🌍 Configure Country Skip List</button>
             <div class="ome-setting-row"><label>Show Debug Panel</label><input type="checkbox" id="ome-chk-panel" ${settings.showPeacePanel ? 'checked' : ''}></div>
             <button id="ome-reset-layout-btn" type="button" class="ome-full-btn">↺ Reset Video Positions</button>
+            <button id="ome-check-updates-btn" type="button" class="ome-full-btn" style="background: #2e7d32;">⬆️ Check for Updates (v${OMEPILOT_VERSION})</button>
             <div class="ome-modal-buttons"><button id="ome-close-btn">Cancel</button><button id="ome-save-btn">Save</button></div>
         `;
         document.body.appendChild(modal);
@@ -468,6 +469,7 @@
         });
         modal.querySelector('#ome-rng-noface-time').addEventListener('input', (e) => { modal.querySelector('#ome-val-noface-time').textContent = e.target.value; });
         modal.querySelector('#ome-reset-layout-btn').addEventListener('click', () => { clearVideoLayouts(); alert('Reset successful.'); });
+        modal.querySelector('#ome-check-updates-btn').addEventListener('click', () => checkForUpdates(true));
 
         modal.querySelector('#ome-save-btn').addEventListener('click', () => {
             saveSettings({
@@ -1691,11 +1693,66 @@
     }
 
     // ==========================================
+    // OMEPILOT AD BANNER + AUTO-UPDATE CHECKER
+    // ==========================================
+    const OMEPILOT_VERSION = '7.3';
+    const OMEPILOT_REPO = 'https://github.com/JohnHansonTheDev/omepilot';
+    const OMEPILOT_VERSION_URL = 'https://raw.githubusercontent.com/JohnHansonTheDev/omepilot/main/version.json';
+
+    function createAdBanner() {
+        if (document.getElementById('ome-github-ad')) return;
+        try {
+            if (localStorage.getItem('omepilot_ad_dismissed') === OMEPILOT_VERSION) return;
+        } catch (e) {}
+        const ad = document.createElement('div');
+        ad.id = 'ome-github-ad';
+        ad.style.cssText = 'position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:999998;background:rgba(15,15,15,.92);color:#eee;border:1px solid #ff5e00;border-radius:20px;padding:5px 12px;font-family:Arial,sans-serif;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.5);display:flex;align-items:center;gap:8px;';
+        ad.innerHTML = `⭐ <b>OmePilot v${OMEPILOT_VERSION}</b> <a id="ome-ad-link" href="${OMEPILOT_REPO}" target="_blank" rel="noopener" style="color:#ff8c42;font-weight:bold;text-decoration:none;">GitHub ↗</a> <span id="ome-ad-update"></span> <span id="ome-ad-close" title="Dismiss" style="cursor:pointer;color:#888;font-weight:bold;">✕</span>`;
+        document.body.appendChild(ad);
+        const close = ad.querySelector('#ome-ad-close');
+        if (close) close.addEventListener('click', () => {
+            try { localStorage.setItem('omepilot_ad_dismissed', OMEPILOT_VERSION); } catch (e) {}
+            ad.remove();
+        });
+    }
+
+    async function checkForUpdates(manual) {
+        try {
+            const res = await fetch(OMEPILOT_VERSION_URL + '?t=' + Date.now(), { cache: 'no-store' });
+            if (!res.ok) throw new Error('http ' + res.status);
+            const data = await res.json();
+            const latest = String((data && data.version) || '').trim();
+            try { localStorage.setItem('omepilot_last_check', String(Date.now())); } catch (e) {}
+            if (latest && latest !== OMEPILOT_VERSION) {
+                peaceLog(`⬆️ OmePilot v${latest} is out (you have v${OMEPILOT_VERSION}) — grab it on GitHub`, 'warning');
+                showToast(`⬆️ OmePilot v${latest} available!`, '#ffaa00');
+                console.log(`[OmePilot] Update available: v${latest} (current v${OMEPILOT_VERSION}) — ${OMEPILOT_REPO}`);
+                const slot = document.getElementById('ome-ad-update');
+                if (slot) slot.innerHTML = `<a href="${OMEPILOT_REPO}" target="_blank" rel="noopener" style="color:#55ff88;font-weight:bold;text-decoration:none;">update ↗</a>`;
+            } else if (manual) {
+                peaceLog(`✅ OmePilot v${OMEPILOT_VERSION} is up to date.`, 'success');
+            }
+        } catch (e) {
+            if (manual) peaceLog('⚠️ Update check failed (offline?).', 'warning');
+        }
+    }
+
+    function scheduleUpdateChecks() {
+        try {
+            const last = parseInt(localStorage.getItem('omepilot_last_check') || '0', 10) || 0;
+            if (Date.now() - last > 24 * 3600 * 1000) checkForUpdates(false);
+        } catch (e) { checkForUpdates(false); }
+        setInterval(() => { try { checkForUpdates(false); } catch (e) {} }, 6 * 3600 * 1000);
+    }
+
+    // ==========================================
     // INITIALIZATION
     // ==========================================
     function initialize() {
         applySettings(); createSettingsUI(); createPeacePanel(); createGalleryModal(); setupVideoTools(); setupChatObserver();
         setupCountryPoller();
+        createAdBanner();
+        scheduleUpdateChecks();
         setupRemoteDisconnectListener();
         setTimeout(initializePeaceDetector, 1500);
         setTimeout(remoteGenderLoop, 2500);

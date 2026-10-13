@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OmePilot",
-  "version": "7.2",
+  "version": "7.3",
   "description": "Ome.tv autopilot: country skip, smart filters, auto-greet and face-snap gallery.",
   "content_scripts": [
     {
