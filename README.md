@@ -119,6 +119,17 @@ Updates are automatic: OmePilot checks this repo for new versions and tells you 
 ### Video recording — faces & clips gallery
 ![Clips gallery](screenshots/clips-gallery.png)
 
+## Extras
+
+### 🚩 Country overlay fix (separate script)
+
+Ome.tv's own **country-filter popup** can render off-screen or half-cut when it opens over the dimmed background, leaving a stray panel behind the page. This is a tiny **standalone** userscript that only fixes that popup — it lifts it onto the page body, centers it, keeps it inside the screen and gives it a scrollbar. It does **not** touch OmePilot, so both run side by side.
+
+- With Tampermonkey: create a new userscript and paste [`extras/overlay-flag-fix.user.js`](extras/overlay-flag-fix.user.js), then save.
+- Needs no settings — install and reload `ome.tv`.
+
+![Country overlay fix](screenshots/flag-fix.png)
+
 ## If the page feels slow
 
 Turn filters off one at a time and see which one was the cause.
