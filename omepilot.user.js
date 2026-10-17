@@ -1,12 +1,14 @@
 // ==UserScript==
-// @name         Ome.tv Customizer + Peace, Male, No-Face & Country Auto Skip + Female Auto Hi (with Pause)
+// @name         Ome.tv Customizer + Peace, Male, No-Face & Country Auto Skip + Female Auto Hi (with Pause) + Video Recording
 // @namespace    http://tampermonkey.net/
-// @version      7.3
-// @description  Drag/resize, dark mode, hotkeys, automatic peace-sign skip, remote face/gender skip, frozen/black camera skip, country blocklist skip, auto-hi with auto-pause, skip counter, face save mode gallery, and local server video restart trigger on manual and automatic skips.
+// @version      8.9
+// @description  Drag/resize, dark mode, hotkeys, automatic peace-sign skip, remote face/gender skip, frozen/black camera skip, country blocklist skip, auto-hi with auto-pause, skip counter, face save mode gallery, per-partner video recording with fullscreen player + real thumbnails, WebM duration fix, and local server video restart trigger on manual and automatic skips.
 // @author       You
 // @match        *://ome.tv/*
 // @match        *://*.ome.tv/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=ome.tv
+// @downloadURL  https://raw.githubusercontent.com/JohnHansonTheDev/omepilot/main/omepilot.user.js
+// @updateURL    https://raw.githubusercontent.com/JohnHansonTheDev/omepilot/main/omepilot.user.js
 // @grant        none
 // @require      https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js
 // @require      https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js
@@ -16,8 +18,6 @@
 (function() {
     'use strict';
 
-    // Prevent double-load (Tampermonkey iframe runs + re-injects = duplicate
-    // ML loops + observers = "page is slowing down your browser").
     if (window._omeCustomizerLoaded) return;
     window._omeCustomizerLoaded = true;
 
@@ -32,47 +32,42 @@
         stopKey: 's',
         pauseKey: 'x',
 
-        // Peace-sign settings
         peaceAutoSkip: false,
         showPeacePanel: true,
         peaceRequiredFrames: 7,
         peaceCooldown: 2500,
         detectionInterval: 120,
 
-        // Male auto-skip settings
         skipMaleAuto: true,
         maleConfidenceThreshold: 0.65,
         maleRequiredFrames: 3,
         maleCooldown: 2500,
 
-        // No-Face auto-skip settings
         skipNoFaceAuto: true,
         noFaceRequiredSeconds: 3,
         noFaceCooldown: 2500,
 
-        // Frozen/Hanging camera settings
         skipFrozenAuto: true,
         frozenRequiredSeconds: 3.5,
         frozenCooldown: 3000,
 
-        // Black-screen camera settings (lens covered / black feed)
         skipBlackAuto: true,
         blackLuminanceThreshold: 12,
         blackRequiredSeconds: 2.5,
         blackCooldown: 3000,
 
-        // Country Auto-Skip settings
         skipCountryAuto: false,
-        skippedCountries: {}, // e.g. { "US": true, "GR": true }
+        skippedCountries: {},
 
-        // Custom Female Greeting
         femaleGreetingMessage: 'hi',
         pauseOnFemale: false,
 
-        // Save Mode
         saveMode: false,
 
-        // Restart Video Server Request
+        recordMode: false,
+        maxRecordingSeconds: 180,
+        maxRecordingsStored: 20,
+
         restartVideoEnabled: false
     };
 
@@ -88,9 +83,25 @@
     let savedLayouts = JSON.parse(localStorage.getItem('ometv_video_layouts')) || {};
     let currentCamera = null;
 
+    let activeRecorder = null;
+    let activeRecordingChunks = [];
+    let activeRecordingStartTime = 0;
+    let capturedRecordings = [];
+    let recordingPartnerId = 0;
+    let recordingCountry = null;      // country latched while the partner is connected
+    let pendingRecordingTexts = [];   // partner texts snapshotted at stop time
+
+    // Recorder-loop state (independent of master pause)
+    let recorderLastVideoRef = null;
+    let recorderLastSrcKey = null;
+    let recorderSawRemote = false;
+
+    // Viewer state
+    let omeViewerOpen = false;
+    let omeGalleryRerenderPending = false;
+    let omeViewerSourceUrl = null;
+
     function saveSettings(newSettings) {
-        // Preserve blocklist when callers (main Save button) omit it — otherwise
-        // opening Settings + Save wipes your checked countries.
         if (!newSettings.skippedCountries && settings.skippedCountries) {
             newSettings.skippedCountries = settings.skippedCountries;
         }
@@ -201,8 +212,7 @@
         #ome-save-btn { background: #28a745; color: white; }
         #ome-close-btn { background: #dc3545; color: white; }
 
-        /* Country Modal Style */
-        #ome-country-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #222 !important; color: #fff !important; padding: 20px; border-radius: 12px; z-index: 2000000; box-shadow: 0 10px 30px rgba(0,0,0,0.8); font-family: Arial, sans-serif; width: 420px; max-height: 80vh; border: 1px solid #444; display: flex; flex-direction: column; }
+        #ome-country-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #222 !important; color: #fff !important; padding: 20px; border-radius: 12px; z-index: 2000000; box-shadow: 0 10px 30px rgba(0,0,0,0.8); font-family: Arial, sans-serif; width: 420px; max-height: 80vh; border: 1px solid #444; flex-direction: column; }
         #ome-country-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; max-height: 50vh; overflow-y: auto; background: #181818; padding: 10px; border-radius: 6px; border: 1px solid #333; margin-top: 10px; margin-bottom: 15px; }
         .ome-country-item { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; user-select: none; }
         .ome-country-item input { cursor: pointer; }
@@ -241,10 +251,20 @@
         .ome-gallery-card button:hover { background: #ff5e00; }
         .ome-gallery-flag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: bold; color: #fff; background: rgba(255,255,255,.08); border: 1px solid #555; border-radius: 20px; padding: 2px 8px 2px 2px; margin-top: 6px; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
         .ome-gallery-flag img { width: 22px !important; height: 15px !important; object-fit: cover; border-radius: 3px; cursor: default; }
+        .ome-video-thumb { position: relative; width: 100%; height: 100px; background: #000; border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: zoom-in; overflow: hidden; background-size: cover; background-position: center; }
+        .ome-video-thumb .ome-play-icon { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 34px; color: #fff; opacity: 0.9; pointer-events: none; text-shadow: 0 2px 6px rgba(0,0,0,0.9); }
+        .ome-video-thumb .ome-duration-tag { position: absolute; bottom: 4px; right: 6px; font-size: 10px; color: #ddd; background: rgba(0,0,0,0.6); padding: 1px 5px; border-radius: 3px; pointer-events: none; }
 
         #ome-image-viewer-modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); z-index: 2000000; justify-content: center; align-items: center; cursor: pointer; flex-direction: column; }
         #ome-viewer-img { max-width: 90vw; max-height: 85vh; object-fit: contain; border-radius: 6px; box-shadow: 0 5px 30px rgba(0,0,0,0.9); border: 1px solid #444; }
         #ome-viewer-caption { color: #fff; margin-top: 12px; font-family: Arial, sans-serif; font-size: 14px; text-align: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 4px; border: 1px solid #333; }
+
+        #ome-video-viewer-modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.94); z-index: 2000000; justify-content: center; align-items: center; flex-direction: column; padding: 20px; box-sizing: border-box; }
+        #ome-video-viewer-stage { position: relative; display: flex; justify-content: center; align-items: center; line-height: 0; }
+        #ome-video-viewer-stage video { display: block; max-width: 92vw; max-height: 85vh; background: #000; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.9); border: 1px solid #444; outline: none; }
+        #ome-video-viewer-caption { color: #fff; margin-top: 14px; font-family: Arial, sans-serif; font-size: 14px; text-align: center; background: rgba(0,0,0,0.6); padding: 8px 16px; border-radius: 6px; border: 1px solid #333; position: relative; z-index: 2; }
+        #ome-video-viewer-close { position: absolute; top: 10px; right: 10px; width: 40px; height: 40px; padding: 0; border: none; border-radius: 50%; background: rgba(220, 53, 69, 0.95); color: #fff; font-size: 26px; font-weight: bold; line-height: 1; cursor: pointer; z-index: 2147483000; display: flex; align-items: center; justify-content: center; box-shadow: 0 3px 12px rgba(0,0,0,0.7); transition: transform 0.15s, background 0.15s; }
+        #ome-video-viewer-close:hover { background: #ff1a2e; transform: scale(1.08); }
     `;
 
     const styleEl = document.createElement('style');
@@ -349,7 +369,6 @@
             `;
         });
 
-        // Custom codes already saved (not in the built-in list) — keep them visible
         const knownCodes = new Set(SUPPORTED_COUNTRIES.map(c => c.code));
         const customCodes = Object.keys(settings.skippedCountries || {}).filter(k => /^[A-Za-z]{2}$/.test(k) && !knownCodes.has(k.toUpperCase()));
         customCodes.forEach(code => {
@@ -442,6 +461,9 @@
             <div class="ome-setting-row"><label>Stop Key</label><input type="text" id="ome-inp-stop" maxlength="1" value="${settings.stopKey}"></div>
             <div class="ome-setting-row"><label>Pause / Resume Key</label><input type="text" id="ome-inp-pause" maxlength="1" value="${settings.pauseKey}"></div>
             <div class="ome-setting-row"><label>📸 Save Mode (Face Snap)</label><input type="checkbox" id="ome-chk-savemode" ${settings.saveMode ? 'checked' : ''}></div>
+            <div class="ome-setting-row"><label>🎥 Record Mode (Full Video)</label><input type="checkbox" id="ome-chk-recordmode" ${settings.recordMode ? 'checked' : ''}></div>
+            <div class="ome-setting-row"><label style="font-size:13px;color:#aaa;">↳ Max clip: <span id="ome-val-maxrec">${settings.maxRecordingSeconds}</span>s</label><input type="range" id="ome-rng-maxrec" min="15" max="600" step="15" value="${settings.maxRecordingSeconds}"></div>
+            <div class="ome-setting-row"><label style="font-size:13px;color:#aaa;">↳ Keep last: <span id="ome-val-maxkeep">${settings.maxRecordingsStored}</span></label><input type="range" id="ome-rng-maxkeep" min="5" max="100" step="5" value="${settings.maxRecordingsStored}"></div>
             <div class="ome-setting-row"><label>🔄 Restart Video on Skip (9999)</label><input type="checkbox" id="ome-chk-restartvideo" ${settings.restartVideoEnabled ? 'checked' : ''}></div>
             <div class="ome-setting-row"><label>✌️ Peace Auto Skip</label><input type="checkbox" id="ome-chk-peace" ${settings.peaceAutoSkip ? 'checked' : ''}></div>
             <div class="ome-setting-row"><label>♂️ Male Auto Skip</label><input type="checkbox" id="ome-chk-male" ${settings.skipMaleAuto ? 'checked' : ''}></div>
@@ -468,6 +490,8 @@
             if (cModal) cModal.style.display = 'flex';
         });
         modal.querySelector('#ome-rng-noface-time').addEventListener('input', (e) => { modal.querySelector('#ome-val-noface-time').textContent = e.target.value; });
+        modal.querySelector('#ome-rng-maxrec').addEventListener('input', (e) => { modal.querySelector('#ome-val-maxrec').textContent = e.target.value; });
+        modal.querySelector('#ome-rng-maxkeep').addEventListener('input', (e) => { modal.querySelector('#ome-val-maxkeep').textContent = e.target.value; });
         modal.querySelector('#ome-reset-layout-btn').addEventListener('click', () => { clearVideoLayouts(); alert('Reset successful.'); });
         modal.querySelector('#ome-check-updates-btn').addEventListener('click', () => checkForUpdates(true));
 
@@ -480,6 +504,9 @@
                 stopKey: modal.querySelector('#ome-inp-stop').value.toLowerCase() || 's',
                 pauseKey: modal.querySelector('#ome-inp-pause').value.toLowerCase() || 'x',
                 saveMode: modal.querySelector('#ome-chk-savemode').checked,
+                recordMode: modal.querySelector('#ome-chk-recordmode').checked,
+                maxRecordingSeconds: parseInt(modal.querySelector('#ome-rng-maxrec').value, 10),
+                maxRecordingsStored: parseInt(modal.querySelector('#ome-rng-maxkeep').value, 10),
                 restartVideoEnabled: modal.querySelector('#ome-chk-restartvideo').checked,
                 peaceAutoSkip: modal.querySelector('#ome-chk-peace').checked,
                 skipMaleAuto: modal.querySelector('#ome-chk-male').checked,
@@ -505,10 +532,26 @@
         return isLocal ? 'ometv_local_camera_layout' : (container.id ? 'ometv_' + container.id : 'ometv_remote_video_layout');
     }
 
+    function isOurVideo(video) {
+        if (!video) return false;
+        if (video.dataset && video.dataset.omeIgnore === '1') return true;
+        let el = video;
+        while (el) {
+            if (el.id === 'ome-video-viewer-modal' ||
+                el.id === 'ome-gallery-modal' ||
+                el.id === 'ome-image-viewer-modal' ||
+                el.id === 'ome-settings-modal' ||
+                el.id === 'ome-country-modal') return true;
+            el = el.parentElement;
+        }
+        return false;
+    }
+
     function setupVideoTools() {
         const observer = new MutationObserver(() => {
             document.querySelectorAll('video').forEach(video => {
                 if (video.dataset.omeToolsAttached) return;
+                if (isOurVideo(video)) return;
                 const container = video.parentElement;
                 if (!container || container.tagName === 'BODY') return;
 
@@ -580,15 +623,11 @@
     let lastCountryCheckedCode = '';
     let lastLoggedCountryKey = '';
 
-    // Direct lookup for <span class="tr-country" data-tr="GR">Greece</span>
-    // This element lives OUTSIDE .message-bubble, so the old bubble-only scan missed it.
-    // Kept ultra-cheap: single querySelector, no full-DOM scans.
     let _lastTrText = '';
     let _lastTrCache = null;
     function getDirectCountry() {
         const el = document.querySelector('.tr-country');
         if (!el) { _lastTrText = ''; _lastTrCache = null; return null; }
-        // Hidden placeholder badge (home screen, not chatting) — ignore it.
         if (el.offsetParent === null) return null;
         const raw = (el.textContent || '') + '|' + (el.getAttribute('data-tr') || '');
         if (raw === _lastTrText && _lastTrCache) return _lastTrCache;
@@ -614,9 +653,8 @@
     }
 
     function checkCountryFilter() {
+        if (omeViewerOpen) return;
         ensureCountryPanelRow();
-        // No active stranger video = not chatting yet. Don't report/skip anything
-        // (the badge can hold a placeholder like Albania on the home screen).
         let chatting = false;
         try { chatting = !!findRemoteVideo(); } catch (e) { chatting = false; }
         if (!chatting) {
@@ -625,8 +663,6 @@
             updateText('ome-peace-country', '--');
             return;
         }
-        // Cheap path only: just .tr-country. Skip the expensive bubble scan here
-        // (the poller + observer call this often — bubble scan is fallback only).
         let info = null;
         try { info = getDirectCountry(); } catch (e) { info = null; }
         if (!info) {
@@ -636,7 +672,13 @@
         const countryCode = ((info && info.countryCode) || '').toUpperCase();
         const countryName = (info && info.countryName) || countryCode || '';
 
-        // Always show in console + panel so you know what was grabbed.
+        // Latch the country for any clip being recorded right now — this is the
+        // most reliable moment (partner is on screen and the poller just read a
+        // fresh value). finalizeRecording() uses this instead of the live DOM.
+        if (activeRecorder && (countryCode || countryName)) {
+            recordingCountry = { countryCode, countryName: countryName || countryCode };
+        }
+
         if (countryCode || countryName) {
             const logKey = currentPartnerId + '|' + countryCode;
             if (logKey !== lastLoggedCountryKey) {
@@ -650,45 +692,29 @@
             updateText('ome-peace-country', '--');
         }
 
-        if (!settings.masterEnable) { console.log('[OmeTV] Country check: master PAUSED, not skipping'); return; }
-        if (!settings.skipCountryAuto) { console.log('[OmeTV] Country check: skipCountryAuto OFF, not skipping'); return; }
+        if (!settings.masterEnable) return;
+        if (!settings.skipCountryAuto) return;
         if (!countryCode) return;
         if (window._omeSkipCooldownUntil && Date.now() < window._omeSkipCooldownUntil) return;
-        // Same partner + same code = already handled. Same partner + DIFFERENT code
-        // (badge loads late: Albania → Greece) must be re-evaluated, otherwise
-        // blocked countries slip through.
         if (currentPartnerId === lastCountryCheckedPartnerId && countryCode === lastCountryCheckedCode) return;
 
-        console.log(`[OmeTV] Country check: ${countryCode} blocklist=${!!settings.skippedCountries[countryCode]} partner=${currentPartnerId}`);
         if (settings.skippedCountries[countryCode]) {
             lastCountryCheckedPartnerId = currentPartnerId;
             lastCountryCheckedCode = countryCode;
-            const msg = `[OmeTV] Blocked country matched (${countryName} / ${countryCode}) → SKIPPING`;
-            console.log(msg);
             peaceLog(`🌍 Blocked country matched (${countryCode}) → SKIPPING`, 'warning');
             showToast(`🌍 Skipping ${countryName} (${countryCode})`, '#ffaa00');
             const ok = triggerAction(['next', 'start', 'skip']);
-            console.log('[OmeTV] Skip click result:', ok);
             if (!ok) {
-                // Fallback: Escape then retry once (some ome.tv builds need it)
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-                setTimeout(() => {
-                    const ok2 = triggerAction(['next', 'start', 'skip']);
-                    console.log('[OmeTV] Skip retry result:', ok2);
-                }, 300);
+                setTimeout(() => { triggerAction(['next', 'start', 'skip']); }, 300);
             }
         } else {
-            // Remember we already logged/checked this partner so we don't spam.
             lastCountryCheckedPartnerId = currentPartnerId;
             lastCountryCheckedCode = countryCode;
-            console.log(`[OmeTV] Country ${countryCode} not in blocklist → staying`);
         }
     }
 
     function setupCountryPoller() {
-        // The .tr-country element updates independently of chat messages,
-        // so poll it — the chat observer alone misses it.
-        // 2.5s + single-element lookup = negligible cost (was 1s + full scans = hang).
         if (window._omeCountryPoller) return;
         window._omeCountryPoller = setInterval(() => {
             try { checkCountryFilter(); } catch (e) {}
@@ -701,7 +727,6 @@
             mutations.forEach((mutation) => {
                 mutation.addedNodes.forEach((node) => {
                     if (node.nodeType === Node.ELEMENT_NODE) {
-                        // If the country badge itself changed, check right away (cheap).
                         try {
                             if (node.classList && (node.classList.contains('tr-country') || (node.querySelector && node.querySelector('.tr-country')))) {
                                 _lastChatCountryCheck = Date.now();
@@ -723,7 +748,8 @@
                                         if (!latest.partnerText) latest.partnerText = [];
                                         if (!latest.partnerText.includes(text)) {
                                             latest.partnerText.push(text);
-                                            renderGalleryGrid();
+                                            if (!omeViewerOpen) renderGalleryGrid();
+                                            else omeGalleryRerenderPending = true;
                                         }
                                     }
                                 }
@@ -732,8 +758,6 @@
                     }
                 });
             });
-            // Debounced: chat fires constantly — max 1 country check per 2s from here
-            // (poller covers the rest). Calling it every mutation = hang.
             const now = Date.now();
             if (now - _lastChatCountryCheck > 2000) {
                 _lastChatCountryCheck = now;
@@ -752,14 +776,13 @@
     // ==========================================
     let hasSentHi = false;
     document.addEventListener('keydown', function(event) {
+        if (omeViewerOpen) return;
         if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') return;
         const key = event.key.toLowerCase();
 
         if (key === settings.pauseKey) {
             event.preventDefault();
-            if (window.setMasterState) {
-                window.setMasterState(!settings.masterEnable);
-            }
+            if (window.setMasterState) window.setMasterState(!settings.masterEnable);
             return;
         }
 
@@ -774,6 +797,7 @@
     });
 
     document.addEventListener('click', function(event) {
+        if (omeViewerOpen) return;
         if (!settings.masterEnable || !settings.restartVideoEnabled) return;
         const target = event.target.closest('button, div[role="button"], .btn, a.btn');
         if (target) {
@@ -786,10 +810,10 @@
     }, true);
 
     function triggerAction(keywords) {
+        if (omeViewerOpen) return false;
+        stopRecordingForPartner();
         resetPartnerState();
         currentPartnerId++;
-        // Next person takes a moment to load — ignore the stale country badge briefly
-        // so we don't instantly skip the NEW person for the OLD person's country.
         window._omeSkipCooldownUntil = Date.now() + 2000;
         _lastTrText = '';
         _lastTrCache = null;
@@ -899,7 +923,7 @@
             else if (type === 'warning') color = '#ffaa00'; else if (type === 'action') color = '#00d0ff';
             else if (type === 'peace') color = '#88ffaa'; else if (type === 'male') color = '#55aaff';
             else if (type === 'frozen') color = '#aaddff'; else if (type === 'noface') color = '#ff8855';
-            else if (type === 'black') color = '#999999';
+            else if (type === 'black') color = '#999999'; else if (type === 'record') color = '#ff66cc';
             line.style.color = color;
             line.innerHTML = `<span style="color: #666;">[${new Date().toLocaleTimeString()}]</span>${message}`;
             log.appendChild(line);
@@ -962,27 +986,21 @@
     }
 
     function getPartnerCountryInfo() {
-        // 1. Fast path: the real badge <span class="tr-country" data-tr="GR">Greece</span>
         try {
             const direct = getDirectCountry();
             if (direct && (direct.countryCode || direct.countryName)) return direct;
         } catch (e) {}
-        // 2. Legacy: scan inside chat bubbles (last 3 only — full scan hangs the page)
         const allBubbles = document.querySelectorAll('.message-bubble');
         const start = Math.max(0, allBubbles.length - 3);
         for (let i = allBubbles.length - 1; i >= start; i--) {
             const bubble = allBubbles[i];
-
-            // Look for flag icons and explicit elements containing country data
             const flagEl = bubble.querySelector('.message-flag, [class*="flags-"], [class*="flag-"], img[src*="flag" i]');
             const countryEl = bubble.querySelector('.tr-country, [data-tr-country], [data-country-code], [data-code], [data-country]');
-
             if (!flagEl && !countryEl) continue;
 
             let countryCode = '';
             let countryName = '';
 
-            // Enhanced regex extraction from data-tr attributes like data-tr="GR" or text content like "Greece"
             if (countryEl) {
                 countryName = cleanCountryText(countryEl.textContent);
                 const attr = (countryEl.getAttribute('data-tr') ||
@@ -990,9 +1008,7 @@
                               countryEl.getAttribute('data-country-code') ||
                               countryEl.getAttribute('data-code') ||
                               countryEl.getAttribute('data-country') || '').trim();
-                if (/^[A-Za-z]{2}$/.test(attr)) {
-                    countryCode = attr.toUpperCase();
-                }
+                if (/^[A-Za-z]{2}$/.test(attr)) countryCode = attr.toUpperCase();
             }
 
             if (!countryCode && flagEl) {
@@ -1028,13 +1044,10 @@
                 }
             }
 
-            // Fallback: search regex directly inside the flag element classes (e.g. flags-GR)
             if (!countryCode && flagEl) {
                 const classStr = typeof flagEl.className === 'string' ? flagEl.className : '';
                 const matchClass = classStr.match(/flags-([A-Za-z]{2})/i);
-                if (matchClass) {
-                    countryCode = matchClass[1].toUpperCase();
-                }
+                if (matchClass) countryCode = matchClass[1].toUpperCase();
             }
 
             if (countryCode && !/^[A-Z]{2}$/.test(countryCode)) countryCode = '';
@@ -1141,7 +1154,8 @@
             });
 
             updateGalleryUI();
-            renderGalleryGrid();
+            if (!omeViewerOpen) renderGalleryGrid();
+            else omeGalleryRerenderPending = true;
             peaceLog(`📸 Face snap saved (#${capturedScreenshots.length})${countryCode ? ` [${countryCode}]` : ''}`, 'success');
         } catch (err) {
             console.warn('Screenshot capture failed:', err);
@@ -1155,11 +1169,11 @@
         modal.id = 'ome-gallery-modal';
         modal.innerHTML = `
             <h3 style="margin-top: 0; border-bottom: 1px solid #444; padding-bottom: 10px; color: #ff5e00;">
-                📸 Captured Faces Gallery (<span id="ome-gallery-modal-count">0</span>)
+                📸 Captured Faces & 🎥 Clips Gallery (<span id="ome-gallery-modal-count">0</span>)
             </h3>
             <div id="ome-gallery-grid"></div>
             <div class="ome-modal-buttons" style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px; border-top: 1px solid #444; padding-top: 15px;">
-                <button id="ome-gallery-download-all" style="background: #28a745; color: white;">Download All</button>
+                <button id="ome-gallery-download-all" style="background: #28a745; color: white;">Download All (ZIP)</button>
                 <button id="ome-gallery-clear" style="background: #ffc107; color: black;">Clear All</button>
                 <button id="ome-gallery-close" style="background: #dc3545; color: white;">Close</button>
             </div>
@@ -1173,34 +1187,126 @@
             <div id="ome-viewer-caption"></div>
         `;
         document.body.appendChild(viewerModal);
+        viewerModal.addEventListener('click', () => { viewerModal.style.display = 'none'; });
 
-        viewerModal.addEventListener('click', () => {
-            viewerModal.style.display = 'none';
+        const videoViewer = document.createElement('div');
+        videoViewer.id = 'ome-video-viewer-modal';
+        videoViewer.innerHTML = `
+            <div id="ome-video-viewer-stage">
+                <video id="ome-viewer-video" controls playsinline preload="metadata" data-ome-ignore="1"></video>
+                <button id="ome-video-viewer-close" title="Close (Esc)" aria-label="Close">×</button>
+            </div>
+            <div id="ome-video-viewer-caption"></div>
+        `;
+        document.body.appendChild(videoViewer);
+
+        const vvVideo = videoViewer.querySelector('#ome-viewer-video');
+        const vvCaption = videoViewer.querySelector('#ome-video-viewer-caption');
+        const vvStage = videoViewer.querySelector('#ome-video-viewer-stage');
+
+        const HARD_BLOCK_EVENTS = [
+            'mousedown','mouseup','click','dblclick','pointerdown','pointerup',
+            'touchstart','touchend','contextmenu','keydown','keyup','keypress',
+            'wheel'
+        ];
+        HARD_BLOCK_EVENTS.forEach(evt => {
+            document.addEventListener(evt, (e) => {
+                if (!omeViewerOpen) return;
+                const t = e.target;
+                if (t && videoViewer.contains(t)) return;
+                e.stopImmediatePropagation();
+                e.stopPropagation();
+                if (e.cancelable && (evt === 'keydown' || evt === 'keyup' || evt === 'keypress' || evt === 'contextmenu' || evt === 'wheel')) {
+                    e.preventDefault();
+                }
+            }, true);
         });
+
+        // IMPORTANT: never stopPropagation in the CAPTURE phase on the whole viewer.
+        // Doing so swallowed clicks before they reached the close button and the
+        // native video controls — that was the «✕ / download unclickable» bug.
+        // The document-level guard above already blocks stray events outside the
+        // viewer, so we only need to keep the site from hijacking keys typed while
+        // the viewer is focused.
+
+        vvVideo.addEventListener('keydown', (e) => { e.stopImmediatePropagation(); e.stopPropagation(); }, true);
+        vvVideo.addEventListener('keyup',   (e) => { e.stopImmediatePropagation(); e.stopPropagation(); }, true);
+        vvVideo.addEventListener('keypress',(e) => { e.stopImmediatePropagation(); e.stopPropagation(); }, true);
+
+        let currentViewerItem = null;
+
+        function closeVideoViewer() {
+            omeViewerOpen = false;
+            omeViewerSourceUrl = null;
+            try { vvVideo.pause(); } catch (e) {}
+            vvVideo.removeAttribute('src');
+            try { vvVideo.load(); } catch (e) {}
+            videoViewer.style.display = 'none';
+            currentViewerItem = null;
+            if (omeGalleryRerenderPending) {
+                omeGalleryRerenderPending = false;
+                try { renderGalleryGrid(); } catch (e) {}
+            }
+        }
+
+        videoViewer.querySelector('#ome-video-viewer-close').addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeVideoViewer();
+        });
+
+        // Download lives on each clip card in the gallery now — no floating button
+        // in the player (it was colliding with the ✕ and was unreachable).
+
+        // Click anywhere outside the video (backdrop or caption) closes the player.
+        videoViewer.addEventListener('click', (e) => {
+            if (!vvStage.contains(e.target)) closeVideoViewer();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (omeViewerOpen && e.key === 'Escape') {
+                e.stopImmediatePropagation();
+                e.stopPropagation();
+                e.preventDefault();
+                closeVideoViewer();
+            }
+        }, true);
+
+        window._omeOpenVideoViewer = function(item, index, code) {
+            currentViewerItem = item;
+            omeViewerSourceUrl = item.blobUrl;
+            vvVideo.muted = false;
+            vvVideo.src = item.blobUrl;
+            vvCaption.textContent = `#${index + 1} · ${item.timestamp} · ${(item.durationMs / 1000).toFixed(1)}s${code ? ` · ${code}` : ''}`;
+            videoViewer.style.display = 'flex';
+            omeViewerOpen = true;
+            vvVideo.play().catch(() => {
+                vvVideo.muted = true;
+                vvVideo.play().catch(() => {});
+            });
+        };
 
         modal.querySelector('#ome-gallery-close').addEventListener('click', () => {
             modal.style.display = 'none';
         });
 
         modal.querySelector('#ome-gallery-clear').addEventListener('click', () => {
-            if (confirm('Are you sure you want to clear all saved gallery screenshots?')) {
-                capturedScreenshots = [];
-                renderGalleryGrid();
-                updateGalleryUI();
-            }
+            if (!confirm('Are you sure you want to clear all saved screenshots and recordings?')) return;
+            capturedScreenshots = [];
+            capturedRecordings.forEach(r => { try { URL.revokeObjectURL(r.blobUrl); } catch (e) {} });
+            capturedRecordings = [];
+            renderGalleryGrid();
+            updateGalleryUI();
         });
 
         modal.querySelector('#ome-gallery-download-all').addEventListener('click', async (e) => {
-            if (!capturedScreenshots.length) {
-                alert('No screenshots to download.');
+            if (!capturedScreenshots.length && !capturedRecordings.length) {
+                alert('Nothing to download.');
                 return;
             }
-
             const btn = e.target;
             const originalText = btn.textContent;
             btn.textContent = 'Zipping...';
             btn.disabled = true;
-
             try {
                 const zip = new JSZip();
                 capturedScreenshots.forEach((item, index) => {
@@ -1208,18 +1314,20 @@
                     const prefix = item.countryCode ? `${item.countryCode}_` : '';
                     zip.file(`face_capture_${prefix}${index + 1}_${item.id}.jpg`, base64Data, { base64: true });
                 });
-
+                capturedRecordings.forEach((item, index) => {
+                    const prefix = item.countryCode ? `${item.countryCode}_` : '';
+                    const ext = (item.mimeType || '').includes('mp4') ? 'mp4' : 'webm';
+                    zip.file(`chat_recording_${prefix}${index + 1}_${item.id}.${ext}`, item.blob);
+                });
                 const zipContent = await zip.generateAsync({ type: "blob" });
                 const zipUrl = URL.createObjectURL(zipContent);
-
                 const a = document.createElement('a');
                 a.href = zipUrl;
-                a.download = `ometv_faces_${Date.now()}.zip`;
+                a.download = `ometv_captures_${Date.now()}.zip`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(zipUrl);
-
                 btn.textContent = 'Full / Done!';
                 setTimeout(() => { btn.textContent = originalText; btn.disabled = false; }, 3000);
             } catch (err) {
@@ -1237,24 +1345,29 @@
     }
 
     function renderGalleryGrid() {
+        if (omeViewerOpen) { omeGalleryRerenderPending = true; return; }
         const grid = document.getElementById('ome-gallery-grid');
         if (!grid) return;
-
         grid.innerHTML = '';
-        if (capturedScreenshots.length === 0) {
-            grid.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: #888; padding: 20px;">No face screenshots captured yet.</div>';
+
+        const items = [
+            ...capturedScreenshots.map(s => ({ kind: 'image', ...s })),
+            ...capturedRecordings.map(r => ({ kind: 'video', ...r }))
+        ];
+
+        if (items.length === 0) {
+            grid.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: #888; padding: 20px;">No captures yet.</div>';
             return;
         }
 
-        const sortedScreenshots = [...capturedScreenshots].sort((a, b) => {
-            const aHasText = a.partnerText && a.partnerText.length > 0;
-            const bHasText = b.partnerText && b.partnerText.length > 0;
-            return (bHasText ? 1 : 0) - (aHasText ? 1 : 0);
-        });
+        items.sort((a, b) => (b.id || 0) - (a.id || 0));
 
-        sortedScreenshots.forEach((item, index) => {
+        items.forEach((item, index) => {
             const card = document.createElement('div');
             card.className = 'ome-gallery-card';
+            const code = (item.countryCode || '').toUpperCase();
+            const flagImg = item.flagUrl || (code ? getFlagImageUrl(code, 40) : '');
+            const badge = code ? `<div class="ome-gallery-flag">${flagImg ? `<img src="${flagImg}" alt="${code}">` : ''}<span>${code}</span></div>` : '';
 
             const hasText = item.partnerText && item.partnerText.length > 0;
             if (hasText) {
@@ -1263,49 +1376,79 @@
                 card.style.backgroundColor = '#2a1a1a';
             }
 
-            const code = (item.countryCode || '').toUpperCase();
-            const flagImg = item.flagUrl || (code ? getFlagImageUrl(code, 40) : '');
-            const badge = code ? `<div class="ome-gallery-flag">${flagImg ? `<img src="${flagImg}" alt="${code} flag">` : ''}<span>${code}</span></div>` : ``;
+            if (item.kind === 'video') {
+                const hasThumb = !!item.thumbnailDataUrl;
+                const bgStyle = hasThumb
+                    ? `background-image: url('${item.thumbnailDataUrl}'); background-size: cover; background-position: center;`
+                    : `background: #000;`;
 
-            const textBtnHtml = hasText ? `<button class="ome-view-text-btn" style="width: 100%; font-size: 11px; padding: 3px; background: #dc3545; color: white; border: none; border-radius: 3px; cursor: pointer; margin-top: 4px;">💬 View Text (${item.partnerText.length})</button>` : '';
+                card.innerHTML = `
+                    <div class="ome-video-thumb" style="${bgStyle}">
+                        <div class="ome-play-icon">▶</div>
+                        <div class="ome-duration-tag">${(item.durationMs / 1000).toFixed(1)}s</div>
+                    </div>
+                    <span>#${index + 1} · ${item.timestamp}</span>
+                    ${badge}
+                    ${hasText ? `<button class="ome-view-text-btn" style="background: #dc3545; margin-top: 4px;">💬 View Text (${item.partnerText.length})</button>` : ''}
+                    <button class="ome-dl-item-btn" style="margin-top: 4px;">Download</button>
+                `;
 
-            card.innerHTML = `
-                <img src="${item.dataUrl}" alt="Captured face ${index + 1}" class="ome-gallery-thumb">
-                <span>#${index + 1} - ${item.timestamp}</span>
-                ${badge}
-                ${textBtnHtml}
-                <button class="ome-dl-item-btn" style="margin-top: 4px;">Download</button>
-            `;
+                const thumbEl = card.querySelector('.ome-video-thumb');
+                thumbEl.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (window._omeOpenVideoViewer) window._omeOpenVideoViewer(item, index, code);
+                });
+            } else {
+                card.innerHTML = `
+                    <img class="ome-gallery-thumb" src="${item.dataUrl}" alt="Capture ${index + 1}">
+                    <span>#${index + 1} - ${item.timestamp}</span>
+                    ${badge}
+                    ${hasText ? `<button class="ome-view-text-btn" style="background: #dc3545; margin-top: 4px;">💬 View Text (${item.partnerText.length})</button>` : ''}
+                    <button class="ome-dl-item-btn" style="margin-top: 4px;">Download</button>
+                `;
 
-            card.querySelector('.ome-gallery-thumb').addEventListener('click', () => {
-                const viewer = document.getElementById('ome-image-viewer-modal');
-                const vImg = document.getElementById('ome-viewer-img');
-                const vCap = document.getElementById('ome-viewer-caption');
-                if (viewer && vImg) {
-                    vImg.src = item.dataUrl;
-                    if (vCap) vCap.textContent = `#${index + 1} - ${item.timestamp} ${code ? `(${code})` : ''}`;
-                    viewer.style.display = 'flex';
-                }
-            });
+                card.querySelector('.ome-gallery-thumb').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const viewer = document.getElementById('ome-image-viewer-modal');
+                    const vImg = document.getElementById('ome-viewer-img');
+                    const vCap = document.getElementById('ome-viewer-caption');
+                    if (viewer && vImg) {
+                        vImg.src = item.dataUrl;
+                        if (vCap) vCap.textContent = `#${index + 1} - ${item.timestamp} ${code ? `(${code})` : ''}`;
+                        viewer.style.display = 'flex';
+                    }
+                });
+            }
 
             if (hasText) {
-                card.querySelector('.ome-view-text-btn').addEventListener('click', () => {
+                const btn = card.querySelector('.ome-view-text-btn');
+                if (btn) btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
                     alert(`Partner Messages (${item.countryCode || 'Unknown'}):\n\n` + item.partnerText.join('\n'));
                 });
             }
 
-            card.querySelector('.ome-dl-item-btn').addEventListener('click', () => {
+            const dlBtn = card.querySelector('.ome-dl-item-btn');
+            dlBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
                 const prefix = code ? `${code}_` : '';
-                downloadImage(item.dataUrl, `face_capture_${prefix}${index + 1}_${item.id}.jpg`);
+                if (item.kind === 'video') {
+                    const ext = (item.mimeType || '').includes('mp4') ? 'mp4' : 'webm';
+                    downloadBlob(item.blob, `chat_recording_${prefix}${index + 1}_${item.id}.${ext}`);
+                } else {
+                    downloadImage(item.dataUrl, `face_capture_${prefix}${index + 1}_${item.id}.jpg`);
+                }
             });
+
             grid.appendChild(card);
         });
     }
 
     function updateGalleryUI() {
-        updateText('ome-gallery-count', capturedScreenshots.length);
+        const total = capturedScreenshots.length + capturedRecordings.length;
+        updateText('ome-gallery-count', total);
         const modalCount = document.getElementById('ome-gallery-modal-count');
-        if (modalCount) modalCount.textContent = capturedScreenshots.length;
+        if (modalCount) modalCount.textContent = total;
     }
 
     function downloadImage(dataUrl, filename) {
@@ -1315,6 +1458,17 @@
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
+    }
+
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
     // ==========================================
@@ -1367,7 +1521,7 @@
             const mToggle = document.getElementById('ome-master-toggle'); const mStatus = document.getElementById('ome-master-status');
             if (mToggle && mStatus) {
                 if (settings.masterEnable) { mToggle.textContent = 'Pause All'; mToggle.style.background = '#e65100'; mStatus.textContent = 'ACTIVE'; mStatus.style.color = '#55ff88'; peaceLog('▶️ All automations RESUMED', 'success'); showToast('▶️ Script RESUMED', '#55ff88'); }
-                else { mToggle.textContent = 'Resume All'; mToggle.style.background = '#dc3545'; mStatus.textContent = 'PAUSED'; mStatus.style.color = '#ff5555'; peaceLog('⏸️ All automations PAUSED', 'error'); showToast('⏸️ Script PAUSED', '#ff5555'); }
+                else { mToggle.textContent = 'Resume All'; mToggle.style.background = '#dc3545'; mStatus.textContent = 'PAUSED'; mStatus.style.color = '#ff5555'; peaceLog('⏸️ Automations PAUSED (recording continues)', 'error'); showToast('⏸️ Script PAUSED', '#ff5555'); }
             }
         };
 
@@ -1388,7 +1542,7 @@
 
     function findLocalCamera() {
         const videos = [...document.querySelectorAll('video')];
-        return videos.find(v => v.muted || v.hasAttribute('muted') || (v.parentElement?.id || '').includes('local') || (v.parentElement?.className || '').includes('local')) || null;
+        return videos.find(v => (v.muted || v.hasAttribute('muted') || (v.parentElement?.id || '').includes('local') || (v.parentElement?.className || '').includes('local')) && !isOurVideo(v)) || null;
     }
 
     async function initializePeaceDetector() {
@@ -1451,8 +1605,8 @@
     async function detectionLoop() {
         while (true) {
             try {
-                if (!settings.masterEnable) {
-                    setPeaceStatus('⏸️ Master Script Paused', false);
+                if (!settings.masterEnable || omeViewerOpen) {
+                    setPeaceStatus(omeViewerOpen ? '⏸️ Viewer open' : '⏸️ Master Script Paused', false);
                     await sleep(1000);
                     continue;
                 }
@@ -1477,8 +1631,10 @@
     }
 
     let remoteMaleFrames = 0, noFaceStartTime = 0, isGenderModelLoaded = false, lastMaleSkip = 0, lastNoFaceSkip = 0, remoteCanvas = null;
+
     function findRemoteVideo() {
         return [...document.querySelectorAll('video')].find(v => {
+            if (isOurVideo(v)) return false;
             const isLocal = v.muted || v.hasAttribute('muted') || (v.parentElement?.id || '').includes('local') || (v.parentElement?.className || '').includes('local');
             return !isLocal && v.readyState >= 2 && !v.paused;
         }) || null;
@@ -1489,6 +1645,7 @@
     function setupRemoteDisconnectListener() {
         setInterval(() => {
             if (!settings.masterEnable) return;
+            if (omeViewerOpen) return;
             const remoteVideo = findRemoteVideo();
             const currentSrc = remoteVideo ? (remoteVideo.srcObject || remoteVideo.currentSrc || remoteVideo.src) : null;
 
@@ -1545,7 +1702,7 @@
 
         while (true) {
             try {
-                if (!settings.masterEnable) {
+                if (!settings.masterEnable || omeViewerOpen) {
                     if (remoteCanvas) remoteCanvas.getContext('2d').clearRect(0, 0, remoteCanvas.width, remoteCanvas.height);
                     noFaceStartTime = 0;
                     remoteMaleFrames = 0;
@@ -1630,7 +1787,7 @@
         const canvas = document.createElement('canvas'); canvas.width = 32; canvas.height = 32; const ctx = canvas.getContext('2d', { willReadFrequently: true });
         while (true) {
             try {
-                if (!settings.masterEnable) {
+                if (!settings.masterEnable || omeViewerOpen) {
                     frozenStartTime = 0; lastFrameData = null; blackStartTime = 0;
                     await sleep(1000); continue;
                 }
@@ -1693,9 +1850,441 @@
     }
 
     // ==========================================
+    // WEBM DURATION FIXER
+    // Fixes "corrupted"/no-duration WebM files from MediaRecorder
+    // by writing the missing Duration element into the EBML header.
+    // ==========================================
+    function fixWebmDuration(blob, durationMs, callback) {
+        const durationSec = durationMs / 1000;
+
+        const fileReader = new FileReader();
+        fileReader.onload = function() {
+            try {
+                const data = new Uint8Array(fileReader.result);
+                const fixed = patchWebmDuration(data, durationSec);
+                if (fixed) {
+                    callback(new Blob([fixed], { type: 'video/webm' }));
+                } else {
+                    callback(blob); // fallback: return original
+                }
+            } catch (e) {
+                console.warn('WebM duration fix failed:', e);
+                callback(blob);
+            }
+        };
+        fileReader.onerror = function() { callback(blob); };
+        fileReader.readAsArrayBuffer(blob);
+    }
+
+    function patchWebmDuration(data, durationSec) {
+        // EBML helper: read variable-length integer size
+        function readVint(data, pos, keepMarker) {
+            const first = data[pos];
+            let length = 1;
+            let mask = 0x80;
+            while (!(first & mask) && length < 8) { mask >>= 1; length++; }
+            let value = keepMarker ? first : (first & (mask - 1));
+            for (let i = 1; i < length; i++) {
+                value = value * 256 + data[pos + i];
+            }
+            return { value, length };
+        }
+
+        function writeVint(value) {
+            // Write as 8-byte vint (safe for any size)
+            const bytes = [];
+            let v = value;
+            for (let i = 7; i >= 0; i--) {
+                bytes[i] = v & 0xff;
+                v = Math.floor(v / 256);
+            }
+            bytes[0] |= 0x01; // set marker bit for 8-byte length
+            return new Uint8Array(bytes);
+        }
+
+        function readId(data, pos) {
+            const r = readVint(data, pos, true);
+            return { id: r.value, length: r.length };
+        }
+
+        // IDs we care about
+        const ID_SEGMENT       = 0x18538067;
+        const ID_INFO          = 0x1549A966;
+        const ID_TIMECODE_SCALE= 0x2AD7B1;
+        const ID_DURATION      = 0x4489;
+
+        let pos = 0;
+
+        // Skip EBML header
+        const ebmlId = readId(data, pos);
+        pos += ebmlId.length;
+        const ebmlSize = readVint(data, pos, false);
+        pos += ebmlSize.length + ebmlSize.value;
+
+        // Now at Segment
+        const segId = readId(data, pos);
+        if (segId.id !== ID_SEGMENT) return null;
+        pos += segId.length;
+        const segSize = readVint(data, pos, false);
+        const segSizeLen = segSize.length;
+        let segDataStart = pos + segSizeLen;
+
+        // Walk children of Segment looking for Info
+        let cursor = segDataStart;
+        const dataEnd = data.length;
+
+        while (cursor < dataEnd) {
+            const idRes = readId(data, cursor);
+            if (idRes.length === 0) break;
+            const idEnd = cursor + idRes.length;
+            const sizeRes = readVint(data, idEnd, false);
+            const sizeEnd = idEnd + sizeRes.length;
+            let elemSize = sizeRes.value;
+
+            if (idRes.id === ID_INFO) {
+                // Found Info — walk its children for Duration
+                let infoCursor = sizeEnd;
+                const infoEnd = elemSize === 0xFFFFFFFFFFFFFF ? dataEnd : sizeEnd + elemSize;
+
+                let timecodeScale = 1000000; // default 1ms
+                let durationPos = -1;
+
+                while (infoCursor < infoEnd) {
+                    const cid = readId(data, infoCursor);
+                    const cidEnd = infoCursor + cid.length;
+                    const csz = readVint(data, cidEnd, false);
+                    const cszEnd = cidEnd + csz.length;
+                    const csize = csz.value;
+                    const cdataStart = cszEnd;
+                    const cdataEnd = (csize === 0xFFFFFFFFFFFFFF) ? infoEnd : cdataStart + csize;
+
+                    if (cid.id === ID_TIMECODE_SCALE) {
+                        let ts = 0;
+                        for (let i = 0; i < csize; i++) ts = ts * 256 + data[cdataStart + i];
+                        if (ts > 0) timecodeScale = ts;
+                    }
+                    if (cid.id === ID_DURATION) {
+                        durationPos = cdataStart;
+                        break;
+                    }
+                    infoCursor = cdataEnd;
+                }
+
+                if (durationPos >= 0) {
+                    // Overwrite existing Duration with float64
+                    const buf = new DataView(new ArrayBuffer(8));
+                    buf.setFloat64(0, durationSec * (1000000000 / timecodeScale));
+                    for (let i = 0; i < 8; i++) data[durationPos + i] = buf.getUint8(i);
+                    return data;
+                } else {
+                    // Duration element missing — insert it.
+                    const durationElemId = new Uint8Array([0x44, 0x89]);
+                    const buf = new DataView(new ArrayBuffer(8));
+                    buf.setFloat64(0, durationSec * (1000000000 / timecodeScale));
+                    const durationData = new Uint8Array(8);
+                    for (let i = 0; i < 8; i++) durationData[i] = buf.getUint8(i);
+
+                    const durationElemSize = writeVint(8);
+                    const durationElem = new Uint8Array(2 + durationElemSize.length + 8);
+                    durationElem.set(durationElemId, 0);
+                    durationElem.set(durationElemSize, 2);
+                    durationElem.set(durationData, 2 + durationElemSize.length);
+
+                    const oldInfoPayload = data.slice(sizeEnd, infoEnd);
+                    const newInfoPayload = new Uint8Array(oldInfoPayload.length + durationElem.length);
+                    newInfoPayload.set(oldInfoPayload, 0);
+                    newInfoPayload.set(durationElem, oldInfoPayload.length);
+
+                    const newInfoSize = writeVint(newInfoPayload.length);
+                    const newInfoId = new Uint8Array([0x15, 0x49, 0xA9, 0x66]);
+
+                    const newInfo = new Uint8Array(newInfoId.length + newInfoSize.length + newInfoPayload.length);
+                    let p = 0;
+                    newInfo.set(newInfoId, p); p += newInfoId.length;
+                    newInfo.set(newInfoSize, p); p += newInfoSize.length;
+                    newInfo.set(newInfoPayload, p);
+
+                    const before = data.slice(0, cursor);
+                    const after  = data.slice(infoEnd);
+
+                    const out = new Uint8Array(before.length + newInfo.length + after.length);
+                    out.set(before, 0);
+                    out.set(newInfo, before.length);
+                    out.set(after, before.length + newInfo.length);
+                    return out;
+                }
+            }
+
+            if (elemSize === 0xFFFFFFFFFFFFFF) break; // unknown size — stop walking
+            cursor = sizeEnd + elemSize;
+        }
+        return null;
+    }
+
+    // ==========================================
+    // 7. VIDEO RECORDER (per-partner clip capture)
+    // ==========================================
+    function pickRecorderMime() {
+        const candidates = [
+            'video/webm;codecs=vp9,opus',
+            'video/webm;codecs=vp8,opus',
+            'video/webm',
+            'video/mp4'
+        ];
+        for (const m of candidates) {
+            if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+        }
+        return '';
+    }
+
+    function generateVideoThumbnail(blob, maxWidth = 320) {
+        return new Promise((resolve) => {
+            try {
+                const url = URL.createObjectURL(blob);
+                const v = document.createElement('video');
+                v.muted = true;
+                v.playsInline = true;
+                v.preload = 'auto';
+                v.src = url;
+
+                let resolved = false;
+                const finish = (val) => {
+                    if (resolved) return;
+                    resolved = true;
+                    try { URL.revokeObjectURL(url); } catch (e) {}
+                    resolve(val);
+                };
+
+                v.addEventListener('loadeddata', () => {
+                    const target = Math.min(1.0, Math.max(0.1, (v.duration || 2) * 0.1));
+                    try { v.currentTime = target; } catch (e) { finish(null); }
+                }, { once: true });
+
+                v.addEventListener('seeked', () => {
+                    try {
+                        const w = v.videoWidth || 320;
+                        const h = v.videoHeight || 180;
+                        const scale = Math.min(1, maxWidth / w);
+                        const cw = Math.max(2, Math.round(w * scale));
+                        const ch = Math.max(2, Math.round(h * scale));
+                        const c = document.createElement('canvas');
+                        c.width = cw; c.height = ch;
+                        const ctx = c.getContext('2d');
+                        ctx.drawImage(v, 0, 0, cw, ch);
+                        finish(c.toDataURL('image/jpeg', 0.7));
+                    } catch (e) {
+                        finish(null);
+                    }
+                }, { once: true });
+
+                v.addEventListener('error', () => finish(null), { once: true });
+
+                setTimeout(() => finish(null), 4000);
+            } catch (e) {
+                resolve(null);
+            }
+        });
+    }
+
+    function startRecordingForPartner(video, partnerIdAtStart) {
+        if (!settings.recordMode) return;
+        if (omeViewerOpen) return;
+        if (!video) return;
+        if (isOurVideo(video)) return;
+        const isLocal = video.muted || video.hasAttribute('muted') || (video.parentElement?.id || '').includes('local') || (video.parentElement?.className || '').includes('local');
+        if (isLocal) return;
+
+        const stream = video.srcObject || (video.captureStream ? video.captureStream() : null);
+        if (!stream) return;
+
+        if (activeRecorder && recordingPartnerId === partnerIdAtStart) return;
+
+        if (activeRecorder) stopRecordingForPartner();
+
+        try {
+            const mimeType = pickRecorderMime();
+            const options = mimeType ? { mimeType, videoBitsPerSecond: 1_000_000 } : undefined;
+            activeRecorder = new MediaRecorder(stream, options);
+        } catch (e) {
+            peaceLog('⚠️ MediaRecorder not available for this stream', 'warning');
+            activeRecorder = null;
+            return;
+        }
+
+        activeRecordingChunks = [];
+        activeRecordingStartTime = Date.now();
+        recordingPartnerId = partnerIdAtStart;
+        recordingCountry = null;
+        pendingRecordingTexts = [];
+        try {
+            const i0 = getPartnerCountryInfo();
+            if (i0 && (i0.countryCode || i0.countryName)) {
+                recordingCountry = { countryCode: (i0.countryCode || '').toUpperCase(), countryName: i0.countryName || (i0.countryCode || '') };
+            }
+        } catch (e) {}
+
+        activeRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) activeRecordingChunks.push(e.data);
+        };
+        activeRecorder.onstop = finalizeRecording;
+        activeRecorder.onerror = (e) => peaceLog('⚠️ Recorder error: ' + (e.error?.name || 'unknown'), 'warning');
+
+        try {
+            activeRecorder.start(1000);
+            peaceLog(`🎥 Recording started (partner #${partnerIdAtStart})`, 'record');
+        } catch (e) {
+            peaceLog('⚠️ Failed to start recorder', 'warning');
+            activeRecorder = null;
+        }
+
+        const cap = (settings.maxRecordingSeconds || 180) * 1000;
+        setTimeout(() => {
+            if (activeRecorder && activeRecorder.state === 'recording'
+                && recordingPartnerId === partnerIdAtStart
+                && Date.now() - activeRecordingStartTime >= cap) {
+                peaceLog('🎥 Max clip length reached → stopping', 'warning');
+                stopRecordingForPartner();
+            }
+        }, cap + 500);
+    }
+
+    function stopRecordingForPartner() {
+        if (!activeRecorder) return;
+        pendingRecordingTexts = [...currentPartnerTexts];
+        try {
+            if (activeRecorder.state !== 'inactive') activeRecorder.stop();
+        } catch (e) {}
+    }
+
+    function finalizeRecording() {
+        if (!activeRecordingChunks.length) {
+            activeRecorder = null;
+            pendingRecordingTexts = [];
+            recordingCountry = null;
+            return;
+        }
+
+        const mimeType = activeRecorder?.mimeType || 'video/webm';
+        const rawBlob = new Blob(activeRecordingChunks, { type: mimeType });
+        const durationMs = Date.now() - activeRecordingStartTime;
+
+        // Prefer the country latched while this partner was actually on screen.
+        // Reading the DOM at stop time is unreliable: by the time the recorder
+        // fires onstop the partner has changed and .tr-country shows a stale/next
+        // node — that is why every clip ended up tagged with the same flag (AL).
+        let info = recordingCountry;
+        if (!info || (!info.countryCode && !info.countryName)) {
+            try { info = getPartnerCountryInfo(); } catch (e) { info = {}; }
+        }
+        const countryCode = (info.countryCode || '').toUpperCase();
+        const countryName = info.countryName || countryCode;
+        const textsSnapshot = pendingRecordingTexts.length ? [...pendingRecordingTexts] : [...currentPartnerTexts];
+
+        // Reset recorder state BEFORE async fix
+        activeRecorder = null;
+        activeRecordingChunks = [];
+        pendingRecordingTexts = [];
+        recordingCountry = null;
+
+        // Patch WebM duration so players show total time & seek correctly
+        fixWebmDuration(rawBlob, durationMs, (fixedBlob) => {
+            const blobUrl = URL.createObjectURL(fixedBlob);
+
+            const item = {
+                id: Date.now(),
+                blobUrl,
+                blob: fixedBlob,
+                mimeType: fixedBlob.type || mimeType,
+                timestamp: new Date().toLocaleTimeString(),
+                durationMs,
+                countryCode,
+                countryName,
+                flagUrl: countryCode ? getFlagImageUrl(countryCode, 40) : '',
+                partnerText: textsSnapshot,
+                thumbnailDataUrl: null
+            };
+            capturedRecordings.push(item);
+
+            while (capturedRecordings.length > (settings.maxRecordingsStored || 20)) {
+                const old = capturedRecordings.shift();
+                try { URL.revokeObjectURL(old.blobUrl); } catch (e) {}
+            }
+
+            peaceLog(`🎥 Clip saved (${(durationMs / 1000).toFixed(1)}s)${countryCode ? ` [${countryCode}]` : ''}`, 'success');
+
+            if (!omeViewerOpen) renderGalleryGrid();
+            else omeGalleryRerenderPending = true;
+            updateGalleryUI();
+
+            generateVideoThumbnail(fixedBlob).then(dataUrl => {
+                if (dataUrl) {
+                    item.thumbnailDataUrl = dataUrl;
+                    const modal = document.getElementById('ome-gallery-modal');
+                    if (modal && modal.style.display === 'block' && !omeViewerOpen) {
+                        renderGalleryGrid();
+                    } else if (omeViewerOpen) {
+                        omeGalleryRerenderPending = true;
+                    }
+                }
+            });
+        });
+    }
+
+    // === Independent recorder loop — ignores master pause entirely ===
+    async function recorderLoop() {
+        await sleep(2000);
+        let lastPartnerIdAtStart = -1;
+
+        while (true) {
+            try {
+                if (!settings.recordMode || omeViewerOpen) {
+                    if (activeRecorder && !settings.recordMode) {
+                        stopRecordingForPartner();
+                    }
+                    await sleep(1000);
+                    continue;
+                }
+
+                const remoteVideo = findRemoteVideo();
+                if (!remoteVideo) {
+                    if (activeRecorder) stopRecordingForPartner();
+                    recorderSawRemote = false;
+                    recorderLastVideoRef = null;
+                    recorderLastSrcKey = null;
+                    await sleep(800);
+                    continue;
+                }
+
+                const srcKey = (remoteVideo.srcObject && remoteVideo.srcObject.id) || remoteVideo.currentSrc || remoteVideo.src || 'unknown';
+                const videoChanged = (remoteVideo !== recorderLastVideoRef) || (srcKey !== recorderLastSrcKey);
+
+                if (videoChanged) {
+                    if (activeRecorder) stopRecordingForPartner();
+
+                    if (!settings.masterEnable) {
+                        lastPartnerIdAtStart++;
+                    } else {
+                        lastPartnerIdAtStart = currentPartnerId;
+                    }
+
+                    recorderLastVideoRef = remoteVideo;
+                    recorderLastSrcKey = srcKey;
+                    recorderSawRemote = true;
+
+                    startRecordingForPartner(remoteVideo, lastPartnerIdAtStart);
+                }
+
+                await sleep(600);
+            } catch (e) {
+                await sleep(800);
+            }
+        }
+    }
+
+    // ==========================================
     // OMEPILOT AD BANNER + AUTO-UPDATE CHECKER
     // ==========================================
-    const OMEPILOT_VERSION = '7.3';
+    const OMEPILOT_VERSION = '8.9';
     const OMEPILOT_REPO = 'https://github.com/JohnHansonTheDev/omepilot';
     const OMEPILOT_VERSION_URL = 'https://raw.githubusercontent.com/JohnHansonTheDev/omepilot/main/version.json';
 
@@ -1757,6 +2346,7 @@
         setTimeout(initializePeaceDetector, 1500);
         setTimeout(remoteGenderLoop, 2500);
         setTimeout(remoteFreezeLoop, 3000);
+        recorderLoop();
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize); else initialize();

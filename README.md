@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <b>OmePilot is the autopilot for Ome.tv.</b> Skip who you don't want, greet who you do, save faces to a gallery — automatically.<br>
+  <b>OmePilot is the autopilot for Ome.tv.</b> Skip who you don't want, greet who you do, save faces to a gallery, and record every chat as a clip — automatically.<br>
   ⭐ <b>Like it? <a href="https://github.com/JohnHansonTheDev/omepilot">Star the repo</a> so others can find it.</b>
 </p>
 
@@ -83,8 +83,16 @@ Updates are automatic: OmePilot checks this repo for new versions and tells you 
 
 ### Gallery
 - **📸 Save Mode (Face Snap)** — saves a photo of every person into the gallery, tagged with their country flag.
-- **📸 Gallery button** (in the panel) — opens all saved photos. Click a photo to enlarge it, **Download** for one photo, **Download All** for a zip of everything, **Clear All** to wipe them.
-- If someone sends chat messages, their photo gets a red border and a **View Text** button.
+- **📸 Gallery button** (in the panel) — opens everything you captured. Click to enlarge/play, **Download** for one item, **Download All** for a zip, **Clear All** to wipe them.
+- If someone sends chat messages, their capture gets a red border and a **View Text** button.
+
+### 🎥 Video recording (new in v8.9)
+- **🎥 Record Mode (Full Video)** — records each person you talk to as a separate clip, automatically — no manual clicking.
+- Every clip gets a **real thumbnail**, its **length**, the **country flag** and the exact **time** it was taken.
+- Click a clip for the **fullscreen player** with native controls. Close it with the **✕** in the video's top-right corner, click **anywhere outside the video**, or press **Esc**.
+- **↳ Max clip** — longest a single clip can run (15–600s).
+- **↳ Keep last** — how many clips to keep; the oldest drop off automatically (5–100).
+- Clips download as `.webm` with a fixed duration, so they seek and show the correct total time in any player.
 
 ### Auto-Skip Panel
 - **Country** — who you're connected to right now.
@@ -107,6 +115,9 @@ Updates are automatic: OmePilot checks this repo for new versions and tells you 
 
 ### Save faces instantly into the gallery
 ![Gallery](screenshots/gallery.png)
+
+### Video recording — faces & clips gallery
+![Clips gallery](screenshots/clips-gallery.png)
 
 ## If the page feels slow
 
