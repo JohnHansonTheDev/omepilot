@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ome.tv Customizer + Peace, Male, No-Face & Country Auto Skip + Female Auto Hi (with Pause) + Video Recording
 // @namespace    http://tampermonkey.net/
-// @version      8.9
+// @version      8.9.1
 // @description  Drag/resize, dark mode, hotkeys, automatic peace-sign skip, remote face/gender skip, frozen/black camera skip, country blocklist skip, auto-hi with auto-pause, skip counter, face save mode gallery, per-partner video recording with fullscreen player + real thumbnails, WebM duration fix, and local server video restart trigger on manual and automatic skips.
 // @author       You
 // @match        *://ome.tv/*
@@ -2284,7 +2284,7 @@
     // ==========================================
     // OMEPILOT AD BANNER + AUTO-UPDATE CHECKER
     // ==========================================
-    const OMEPILOT_VERSION = '8.9';
+    const OMEPILOT_VERSION = '8.9.1';
     const OMEPILOT_REPO = 'https://github.com/JohnHansonTheDev/omepilot';
     const OMEPILOT_VERSION_URL = 'https://raw.githubusercontent.com/JohnHansonTheDev/omepilot/main/version.json';
 
@@ -2347,6 +2347,38 @@
         setTimeout(remoteGenderLoop, 2500);
         setTimeout(remoteFreezeLoop, 3000);
         recorderLoop();
+        createAuthorBadge();
+    }
+
+    // ==========================================
+    // AUTHOR BADGE — small "made by" icon (top-left)
+    // ==========================================
+    const OMEPILOT_AVATAR_URL = 'https://raw.githubusercontent.com/JohnHansonTheDev/omepilot/main/assets/thumbnail.png';
+    const OMEPILOT_GITHUB_URL = 'https://github.com/JohnHansonTheDev/omepilot';
+
+    function createAuthorBadge() {
+        if (document.getElementById('ome-author-badge')) return;
+        try { if (localStorage.getItem('omepilot_author_badge_dismissed') === '1') return; } catch (e) {}
+
+        const badge = document.createElement('a');
+        badge.id = 'ome-author-badge';
+        badge.href = OMEPILOT_GITHUB_URL;
+        badge.target = '_blank';
+        badge.rel = 'noopener';
+        badge.title = 'OmePilot on GitHub — made by JohnHansonTheDev';
+        badge.style.cssText = 'position:fixed;top:10px;left:10px;z-index:999997;display:flex;align-items:center;gap:7px;padding:4px 10px 4px 4px;background:rgba(15,15,15,.82);border:1px solid #ff5e00;border-radius:22px;color:#eee;font-family:Arial,sans-serif;text-decoration:none;box-shadow:0 3px 12px rgba(0,0,0,.45);transition:transform .15s;';
+        badge.innerHTML = '<img src="' + OMEPILOT_AVATAR_URL + '" alt="OmePilot" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1px solid #ff5e00;flex:0 0 auto;display:block;"><span style="font-size:11px;line-height:1.15;"><b style="color:#ff8c42;">OmePilot</b><br><span style="color:#aaa;">made by JohnHansonTheDev</span></span><span id="ome-author-badge-close" title="Dismiss" style="margin-left:2px;color:#888;font-weight:bold;font-size:12px;line-height:1;">✕</span>';
+        document.body.appendChild(badge);
+
+        badge.addEventListener('mouseenter', () => { badge.style.transform = 'scale(1.04)'; });
+        badge.addEventListener('mouseleave', () => { badge.style.transform = 'scale(1)'; });
+        const close = badge.querySelector('#ome-author-badge-close');
+        if (close) close.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            try { localStorage.setItem('omepilot_author_badge_dismissed', '1'); } catch (err) {}
+            badge.remove();
+        });
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize); else initialize();
