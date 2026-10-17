@@ -2358,7 +2358,6 @@
 
     function createAuthorBadge() {
         if (document.getElementById('ome-author-badge')) return;
-        try { if (localStorage.getItem('omepilot_author_badge_dismissed') === '1') return; } catch (e) {}
 
         const badge = document.createElement('a');
         badge.id = 'ome-author-badge';
@@ -2366,19 +2365,12 @@
         badge.target = '_blank';
         badge.rel = 'noopener';
         badge.title = 'OmePilot on GitHub — made by JohnHansonTheDev';
-        badge.style.cssText = 'position:fixed;top:10px;left:10px;z-index:999997;display:flex;align-items:center;gap:7px;padding:4px 10px 4px 4px;background:rgba(15,15,15,.82);border:1px solid #ff5e00;border-radius:22px;color:#eee;font-family:Arial,sans-serif;text-decoration:none;box-shadow:0 3px 12px rgba(0,0,0,.45);transition:transform .15s;';
-        badge.innerHTML = '<img src="' + OMEPILOT_AVATAR_URL + '" alt="OmePilot" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1px solid #ff5e00;flex:0 0 auto;display:block;"><span style="font-size:11px;line-height:1.15;"><b style="color:#ff8c42;">OmePilot</b><br><span style="color:#aaa;">made by JohnHansonTheDev</span></span><span id="ome-author-badge-close" title="Dismiss" style="margin-left:2px;color:#888;font-weight:bold;font-size:12px;line-height:1;">✕</span>';
+        badge.style.cssText = 'position:fixed;top:10px;left:10px;z-index:999997;display:flex;align-items:center;gap:7px;padding:4px 12px 4px 4px;background:rgba(15,15,15,.82);border:1px solid #ff5e00;border-radius:22px;color:#eee;font-family:Arial,sans-serif;text-decoration:none;box-shadow:0 3px 12px rgba(0,0,0,.45);transition:transform .15s;';
+        badge.innerHTML = '<img src="' + OMEPILOT_AVATAR_URL + '" alt="OmePilot" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1px solid #ff5e00;flex:0 0 auto;display:block;"><span style="font-size:11px;line-height:1.15;"><b style="color:#ff8c42;">OmePilot</b><br><span style="color:#aaa;">made by JohnHansonTheDev</span></span>';
         document.body.appendChild(badge);
 
         badge.addEventListener('mouseenter', () => { badge.style.transform = 'scale(1.04)'; });
         badge.addEventListener('mouseleave', () => { badge.style.transform = 'scale(1)'; });
-        const close = badge.querySelector('#ome-author-badge-close');
-        if (close) close.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            try { localStorage.setItem('omepilot_author_badge_dismissed', '1'); } catch (err) {}
-            badge.remove();
-        });
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize); else initialize();
